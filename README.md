@@ -1,6 +1,3 @@
 # Pick-Place_Imitation-Learning-Isaac-sim-ROS2
 title
-<video width="100%" controls>
-  <source src="media\imitation learning_pickplace_4.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+[![Watch the video](https://user-images.githubusercontent.com/your-thumbnail.png)](https://github.com/uiseoklee/Pick-Place_Imitation-Learning-Isaac-sim-ROS2/blob/main/media/imitation%20learning_pickplace_4.mp4)
