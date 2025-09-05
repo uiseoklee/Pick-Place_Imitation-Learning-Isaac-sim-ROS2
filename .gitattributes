@@ -1,0 +1,2 @@
+imitation/data/*.parquet filter=lfs diff=lfs merge=lfs -text
+imitation/outputs/train/*.safetensors filter=lfs diff=lfs merge=lfs -text
