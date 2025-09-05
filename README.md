@@ -4,9 +4,7 @@
 
 ## 🎥 데모 영상 보기
 
-👉 [영상 보기](https://uiseoklee.github.io/Pick-Place_Imitation-Learning-Isaac-sim-ROS2/)
-
-[![Watch the video](https://user-images.githubusercontent.com/your-thumbnail.png)](https://uiseoklee.github.io/Pick-Place_Imitation-Learning-Isaac-sim-ROS2/)
+![Pick-Place Demo](media/imitation_learning_pickplace_4.gif)
 
 ## 📁 프로젝트 구조
 
