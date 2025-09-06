@@ -1,0 +1,258 @@
+#! /usr/bin/env python3
+
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import PoseStamped, Twist, Pose
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from std_msgs.msg import Float64MultiArray, Int32
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+
+from common.inference import Imitation
+from ros2_numpy_tf import numpy2ros, ros2numpy
+
+from enum import Enum
+import transforms3d as t3d
+import subprocess
+import re
+import time
+import cv2
+import os
+import tf2_ros
+import numpy as np
+
+def call_ros2_service(activate_controllers, deactivate_controllers):
+    service_name = '/controller_manager/switch_controller'
+    service_type = 'controller_manager_msgs/srv/SwitchController'
+    strictness = '2'
+    activate_asap = 'true'
+    command = f'ros2 service call {service_name} {service_type} "{{activate_controllers: [\"{activate_controllers}\"], deactivate_controllers: [\"{deactivate_controllers}\"], strictness: {strictness}, activate_asap: {activate_asap}}}"'
+    try:
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        match = re.search(r'response:\n(.*)', result.stdout, re.DOTALL)
+        print(f"{activate_controllers}:", match.group(1).strip())
+    except subprocess.CalledProcessError as e:
+        print(f"Error calling ROS 2 service: {e}")
+
+class OperationState(Enum):
+    IDLE = 0
+    MOVE = 1
+    GO_CLOSE = 2
+    CLOSE_GRIPPER = 3
+    UP = 4
+    MOVE_TO_BASKET = 5
+    DOWN = 6
+    OPEN_GRIPPER = 7
+    RETREAT_UP = 8
+    END = 9
+
+class PickAndPlaceRedBlock(Node):
+    def __init__(self, sim):
+        super().__init__('pick_and_place_red_block')
+        self.get_logger().info("PickAndPlaceRedBlock node started")
+
+        self.image_subscriber = self.create_subscription(Image, '/rgb', self.image_callback, 1)
+        self.bridge = CvBridge()
+        self.timer = self.create_timer(0.1, self.publish_pose)
+        self.publisher_speed_limiter = self.create_publisher(PoseStamped, '/target_frame_raw', 1)
+        self.isaac_gripper_publisher = self.create_publisher(Float64MultiArray, '/position_controller/commands', 1)
+        self.current_pose_subscriber = self.create_subscription(PoseStamped, '/current_pose', self.current_pose_callback, 1)
+        self.imitation = Imitation()
+        
+        self.current_pose_relativ = PoseStamped()
+        self.current_pose = PoseStamped()
+        self.step = 0
+        self.image  = None
+        self.action = None
+        self.max_episode_steps = 400
+        self.sim = sim if sim is not None else True
+        self.observation_pose = None
+        self.observation_current_pose = PoseStamped()
+
+        ### ★★★ 핵심 수정 1: self.gripper_state 초기화를 바깥으로 이동 ★★★ ###
+        self.gripper_state = Float64MultiArray()
+
+        if self.sim:
+            self.gripper_state.data = [0.0]
+            self.isaac_gripper_publisher.publish(self.gripper_state)
+            self.random_move_object = self.create_publisher(Twist, '/respawn', 1)
+            twist_msg = Twist()
+            self.random_move_object.publish(twist_msg)
+        
+        self.timer = time.time()
+        self.publisher_joint_init = self.create_publisher(JointTrajectory, '/joint_trajectory_controller/joint_trajectory', 1)
+        self.joint_state = JointTrajectory()
+        self.joint_names = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
+        point = JointTrajectoryPoint()
+        point.positions = [0.00148, 0.06095, 1.164, -0.00033, 1.122, -0.00093]
+        point.time_from_start.sec = 3
+        self.joint_state.points = [point]
+        self.joint_state.joint_names = self.joint_names
+        self.move_arm_to_init_pose()
+        
+        self.tfBuffer = tf2_ros.Buffer()
+        self.tfListener = tf2_ros.TransformListener(self.tfBuffer, self)
+        self.state = OperationState.IDLE
+        self.place_target_frame_name = "place_target"
+
+    def move_arm_to_init_pose(self):
+        self.get_logger().info("Moving arm to initial pose...")
+        call_ros2_service('joint_trajectory_controller', 'cartesian_motion_controller')
+        self.joint_state.header.stamp = self.get_clock().now().to_msg()
+        self.publisher_joint_init.publish(self.joint_state)
+        time.sleep(3.5)
+        call_ros2_service('cartesian_motion_controller', 'joint_trajectory_controller')
+        self.get_logger().info("Arm is at initial pose.")
+
+    def get_transform(self, target_frame, source_frame):
+        try:
+            return self.tfBuffer.lookup_transform(target_frame, source_frame, rclpy.time.Time())
+        except Exception as e:
+            self.get_logger().error(f"Failed to get transform from {source_frame} to {target_frame}: {e}")
+            return None
+    
+    def current_pose_callback(self, msg):
+        self.observation_current_pose = msg
+        p = msg.pose.position
+        o = msg.pose.orientation
+        quat = [o.w, o.x, o.y, o.z]
+        euler = t3d.euler.quat2euler(quat)
+
+        is_place_phase = self.state.value >= OperationState.MOVE_TO_BASKET.value
+        phase_indicator = 1.0 if is_place_phase else 0.0
+        
+        self.observation_pose = [p.x, p.y, p.z, euler[0], euler[1], euler[2], phase_indicator]
+
+    def image_callback(self, msg):
+        self.image = cv2.resize(self.bridge.imgmsg_to_cv2(msg, "bgr8"), (224, 224))
+        
+    def publish_pose(self):
+        if self.observation_pose is None or self.image is None: return
+
+        self.get_logger().info(f'========================={self.state.name}=========================')
+        self.current_pose.header.stamp = self.get_clock().now().to_msg()
+        self.current_pose.header.frame_id = 'link_base'
+    
+        if self.state == OperationState.IDLE:
+            self.state = OperationState.MOVE
+            self.timer = time.time()
+            self.step = 0
+
+        elif self.state in [OperationState.MOVE, OperationState.MOVE_TO_BASKET]:
+            self.action = self.imitation.step(self.image, self.observation_pose)
+            if self.action is None: return
+            
+            # 훈련된 모델의 출력을 그대로 사용 (수동 스케일링 없음)
+            self.current_pose_relativ.pose.position.x = float(self.action[0] / 1.0)
+            self.current_pose_relativ.pose.position.y = float(self.action[1] / 1.0)
+            self.current_pose_relativ.pose.position.z = float(self.action[2] / 1.0)
+            quat = t3d.euler.euler2quat(self.action[3] / 1000.0, self.action[4] / 1000.0, self.action[5] / 1000.0)
+            
+            self.current_pose_relativ.pose.orientation = numpy2ros(np.eye(4), Pose).orientation
+            self.current_pose_relativ.pose.orientation.w, self.current_pose_relativ.pose.orientation.x, self.current_pose_relativ.pose.orientation.y, self.current_pose_relativ.pose.orientation.z = quat[0], quat[1], quat[2], quat[3]
+            
+            current_pose_target = ros2numpy(self.current_pose_relativ.pose)
+            target_transform = ros2numpy(self.observation_current_pose.pose) @ current_pose_target
+            self.current_pose.pose = numpy2ros(target_transform, Pose)
+            
+            if self.state == OperationState.MOVE:
+                if self.observation_current_pose.pose.position.z < 0.12:
+                    self.state = OperationState.GO_CLOSE
+                    self.timer = time.time()
+            elif self.state == OperationState.MOVE_TO_BASKET:
+                place_target_tf = self.get_transform('gripper_base_link', self.place_target_frame_name)
+                if place_target_tf:
+                    dist_xy = np.linalg.norm([place_target_tf.transform.translation.x, place_target_tf.transform.translation.y])
+                    #if dist_xy < 0.05 and self.observation_current_pose.pose.position.z < 0.2:
+                    if self.observation_current_pose.pose.position.z < 0.15:
+                        self.state = OperationState.DOWN
+                        self.timer = time.time()
+
+            self.publisher_speed_limiter.publish(self.current_pose)
+            self.step += 1
+            if self.step > self.max_episode_steps: self.state = OperationState.END
+
+        elif self.state == OperationState.GO_CLOSE:
+            target_tf = self.get_transform('link_base', 'pick_target')
+            if target_tf:
+                target_pose = PoseStamped()
+                target_pose.header.frame_id = 'link_base'
+                target_pose.pose.position.x, target_pose.pose.position.y, target_pose.pose.position.z = target_tf.transform.translation.x, target_tf.transform.translation.y, target_tf.transform.translation.y#0.025
+                target_pose.pose.orientation = target_tf.transform.rotation
+                self.publisher_speed_limiter.publish(target_pose)
+                if time.time() - self.timer > 3.0:
+                    self.state = OperationState.CLOSE_GRIPPER
+                    self.timer = time.time()
+            else: self.state = OperationState.END
+        
+        elif self.state == OperationState.CLOSE_GRIPPER:
+            self.gripper_state.data = [-0.01]#[-0.015]
+            self.isaac_gripper_publisher.publish(self.gripper_state)
+            if time.time() - self.timer > 1.5:
+                self.state = OperationState.UP
+                self.timer = time.time()
+
+        elif self.state == OperationState.UP:
+            lift_pose = self.observation_current_pose
+            lift_pose.pose.position.z = 0.35
+            self.publisher_speed_limiter.publish(lift_pose)
+            if time.time() - self.timer > 12.0: # 시간을 12초에서 2초로 복원
+                self.state = OperationState.MOVE_TO_BASKET
+                self.timer = time.time()
+                self.step = 0
+
+        elif self.state == OperationState.DOWN:
+            target_tf = self.get_transform('link_base', self.place_target_frame_name)
+            if target_tf:
+                target_pose = PoseStamped()
+                target_pose.header.frame_id = 'link_base'
+                target_pose.pose.position.x, target_pose.pose.position.y, target_pose.pose.position.z = target_tf.transform.translation.x, target_tf.transform.translation.y, 0.07
+                target_pose.pose.orientation = self.observation_current_pose.pose.orientation
+                self.publisher_speed_limiter.publish(target_pose)
+                if time.time() - self.timer > 6.0:
+                    self.state = OperationState.OPEN_GRIPPER
+                    self.timer = time.time()
+            else: self.state = OperationState.END
+
+        elif self.state == OperationState.OPEN_GRIPPER:
+            self.gripper_state.data = [0.0]
+            self.isaac_gripper_publisher.publish(self.gripper_state)
+            if time.time() - self.timer > 1.5:
+                self.state = OperationState.RETREAT_UP
+                self.timer = time.time()
+
+        elif self.state == OperationState.RETREAT_UP:
+            retreat_pose = self.observation_current_pose
+            retreat_pose.pose.position.z = 0.7#0.35
+            self.publisher_speed_limiter.publish(retreat_pose)
+            if time.time() - self.timer > 4.0: # 시간을 4초에서 2초로 복원
+                self.state = OperationState.END
+                self.timer = time.time()
+                self.get_logger().info("Pick and place completed. Preparing to end...")
+
+        elif self.state == OperationState.END:
+            if time.time() - self.timer > 2.0: # 대기 시간 단축
+                self.get_logger().info("Task completed successfully. Shutting down node...")
+                rclpy.shutdown()
+                exit(0)
+
+def main(args=None):
+    rclpy.init(args=args)
+    
+    import argparse
+    parser = argparse.ArgumentParser(description='Pick and Place Red Block')
+    # sim 인자를 받도록 하되, 기본값은 True로 설정하여 '--sim' 없이도 실행 가능하도록 함
+    parser.add_argument('--sim', action=argparse.BooleanOptionalAction, default=True)
+    parsed_args, _ = parser.parse_known_args() # ROS 인자와 충돌 방지
+    
+    cmd_vel_publisher = PickAndPlaceRedBlock(sim=parsed_args.sim)
+    try:
+        rclpy.spin(cmd_vel_publisher)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cmd_vel_publisher.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
