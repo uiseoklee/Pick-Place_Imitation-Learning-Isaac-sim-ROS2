@@ -12,9 +12,6 @@ This project implements Pick-and-Place imitation learning using NVIDIA Isaac Sim
 - ROS 2
 - Python
 - Imitation Learning
-
-Technologies Used
-
 ## What This Repository Enables
 - Collect demonstrations in simulated environments
 - Train and evaluate a Diffusion Policy mode
@@ -30,8 +27,8 @@ curl -sSL https://get.docker.com | sh && sudo usermod -aG docker $USER
 ```
 ### Clone and Build
 ```
-git clone
-cd 
+git clone https://github.com/uiseoklee/Pick-Place_Imitation-Learning-Isaac-sim-ROS2.git
+cd Pick-Place_Imitation-Learning-Isaac-sim-ROS2/docker
 make build-pc run exec
 ```
 ### Build ROS 2 Packages
@@ -39,7 +36,7 @@ make build-pc run exec
 colcon build --symlink-install
 source ./install/local_setup.bash
 ```
-## Running Simulation or Real Robot
+## Running Simulation
 ### Launch ROS 2 Controller
 ```
 ros2 launch xarm_bringup lite6_cartesian_launch.py rviz:=false sim:=true
@@ -52,7 +49,6 @@ cd src/robo_imitate
 ./imitation/pickplace_redblock
 ```
 ### Model Training
-Inside the ~ directory
 Inside the robo_imitate directory
 ```
 docker build --build-arg UID=$(id -u) -t imitation .
