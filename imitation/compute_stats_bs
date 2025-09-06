@@ -1,0 +1,160 @@
+#!/usr/bin/env python
+
+from copy import deepcopy
+from math import ceil
+import datasets
+import tqdm
+import einops
+import torch
+import os
+import argparse  # <-- [FIX] Missing import added
+from common.utils import flatten_dict
+from common.dataset import calculate_episode_data_index_for_custom_dataset, LeRobotDataset
+from PIL import Image as PILImage
+from datasets import load_dataset
+from torchvision import transforms
+import io
+import numpy as np
+
+def hf_transform_to_torch(items_dict):
+    # This transform is now more robust.
+    for key in items_dict:
+        items = items_dict[key]
+        
+        if key == 'observation.image':
+            # items is a list of bytes, convert them to a tensor
+            tensor_list = [transforms.ToTensor()(PILImage.open(io.BytesIO(item))) for item in items]
+            items_dict[key] = torch.stack(tensor_list)
+
+        elif key in ['observation.state', 'action']:
+            # This logic correctly parses string representations of lists
+            try:
+                np_list = [np.array([float(x) for x in item.strip()[1:-1].split(',')], dtype=np.float32) for item in items]
+                items_dict[key] = torch.from_numpy(np.stack(np_list))
+            except (ValueError, IndexError) as e:
+                print(f"Warning: Could not parse key '{key}'. Item: '{items[0]}'. Error: {e}")
+                # Handle case where parsing fails by creating a zero tensor of expected shape
+                # This requires knowing the shape beforehand, which is tricky.
+                # For now, we'll let it fail if parsing is inconsistent.
+                pass
+        
+        else:
+            # Handle other numeric types
+            try:
+                items_dict[key] = torch.tensor(items)
+            except (TypeError, ValueError):
+                pass
+                
+    return items_dict
+
+def load_hf_dataset(repo_id, version, root, split) -> datasets.Dataset:
+    print("roooooooooooooooot: ", root)
+    hf_dataset = load_dataset('parquet', data_files=root, split=split)
+    hf_dataset.set_transform(hf_transform_to_torch)
+    return hf_dataset
+
+def get_stats_einops_patterns(dataset: LeRobotDataset | datasets.Dataset, num_workers=0):
+    dataloader = torch.utils.data.DataLoader(dataset, num_workers=num_workers, batch_size=2, shuffle=False)
+    batch = next(iter(dataloader))
+    stats_patterns = {}
+    print(dataset.features.items())
+    print('________________________________________')
+    
+    for key, feats_type in dataset.features.items():
+        if key not in batch: continue # Skip if key not in transformed batch
+        assert batch[key].dtype != torch.float64
+        print('key, feats_type: ', key, feats_type)
+
+        if key == 'observation.image':
+            print('_______________ is image _____________ ',  batch[key].shape)
+            _, c, h, w = batch[key].shape
+            print(c, h, w)
+            assert c < h and c < w, f"expect channel first images, but instead {batch[key].shape}"
+            assert batch[key].dtype == torch.float32, f"expect torch.float32, but instead {batch[key].dtype=}"
+            assert batch[key].max() <= 1, f"expect pixels lower than 1, but instead {batch[key].max()=}"
+            assert batch[key].min() >= 0, f"expect pixels greater than 1, but instead {batch[key].min()=}"
+            stats_patterns[key] = "b c h w -> c 1 1"
+        elif batch[key].ndim == 2:
+            stats_patterns[key] = "b c -> c "
+        elif batch[key].ndim == 1:
+            stats_patterns[key] = "b -> 1"
+        else:
+            raise ValueError(f"{key}, {feats_type}, {batch[key].shape}")
+    return stats_patterns
+
+def compute_stats(dataset: LeRobotDataset | datasets.Dataset, batch_size=32, num_workers=16, max_num_samples=None):
+    if max_num_samples is None: max_num_samples = len(dataset)
+    stats_patterns = get_stats_einops_patterns(dataset, num_workers)
+    mean, std, max_val, min_val = {}, {}, {}, {}
+    for key in stats_patterns:
+        mean[key] = torch.tensor(0.0).float(); std[key] = torch.tensor(0.0).float()
+        max_val[key] = torch.tensor(-float("inf")).float(); min_val[key] = torch.tensor(float("inf")).float()
+
+    def create_seeded_dataloader(d, bs, seed):
+        g = torch.Generator(); g.manual_seed(seed)
+        return torch.utils.data.DataLoader(d, num_workers=num_workers, batch_size=bs, shuffle=True, drop_last=False, generator=g)
+
+    running_item_count = 0
+    dataloader = create_seeded_dataloader(dataset, batch_size, seed=1337)
+    for i, batch in enumerate(tqdm.tqdm(dataloader, total=ceil(max_num_samples / batch_size), desc="Compute mean, min, max")):
+        this_batch_size = len(batch.get("index", next(iter(batch.values())))) # More robust way to get batch size
+        running_item_count += this_batch_size
+        for key, pattern in stats_patterns.items():
+            batch[key] = batch[key].float()
+            batch_mean = einops.reduce(batch[key], pattern, "mean")
+            mean[key] = mean[key] + this_batch_size * (batch_mean - mean[key]) / running_item_count
+            max_val[key] = torch.maximum(max_val[key], einops.reduce(batch[key], pattern, "max"))
+            min_val[key] = torch.minimum(min_val[key], einops.reduce(batch[key], pattern, "min"))
+        if i >= ceil(max_num_samples / batch_size) - 1: break
+
+    running_item_count = 0
+    dataloader = create_seeded_dataloader(dataset, batch_size, seed=1337)
+    for i, batch in enumerate(tqdm.tqdm(dataloader, total=ceil(max_num_samples / batch_size), desc="Compute std")):
+        this_batch_size = len(batch.get("index", next(iter(batch.values()))))
+        running_item_count += this_batch_size
+        for key, pattern in stats_patterns.items():
+            batch[key] = batch[key].float()
+            batch_std = einops.reduce((batch[key] - mean[key]) ** 2, pattern, "mean")
+            std[key] = std[key] + this_batch_size * (batch_std - std[key]) / running_item_count
+        if i >= ceil(max_num_samples / batch_size) - 1: break
+
+    for key in stats_patterns:
+        std[key] = torch.sqrt(std[key])
+    
+    stats = {}
+    for key in stats_patterns:
+        stats[key] = {"mean": mean[key], "std": std[key], "max": max_val[key], "min": min_val[key]}
+    return stats
+
+def save_meta_data(info, stats, episode_data_index, meta_data_dir):
+    from safetensors.torch import save_file
+    stats_path = os.path.join(meta_data_dir, "stats.safetensors")
+    save_file(flatten_dict(stats), stats_path)
+
+def main():
+    parser = argparse.ArgumentParser(description='Compute stats for a LeRobot dataset.')
+    parser.add_argument('--path', type=str, required=True, help='Path to the Parquet dataset file.')
+    parsed_args = parser.parse_args()
+    
+    repo_id = 'test'
+    revision = 0
+    root = parsed_args.path
+    
+    hf_dataset = load_hf_dataset(repo_id, revision, root, 'train')
+    episode_data_index = calculate_episode_data_index_for_custom_dataset(hf_dataset)
+    print('==================================================')
+    print(episode_data_index)
+    print('==================================================')
+    lerobot_dataset = LeRobotDataset.from_preloaded(
+        repo_id=repo_id, version=revision, hf_dataset=hf_dataset, episode_data_index=episode_data_index
+    )
+    
+    stats = compute_stats(lerobot_dataset, 2, 4)
+    meta_data_dir = 'imitation/metadata/'
+    print('[INFO] Metadata path: ', meta_data_dir)
+    os.makedirs(meta_data_dir, exist_ok=True)
+    save_meta_data(None, stats, episode_data_index, meta_data_dir)
+    print(stats)
+
+if __name__ == "__main__":
+    main()

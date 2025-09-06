@@ -1,0 +1,100 @@
+FROM osrf/ros:humble-desktop
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG UID=1000
+ARG DOCKERUSER=
+ARG DOCKERUSERCOMMENT=
+
+RUN useradd -d /${DOCKERUSER} -m \
+            -u ${UID} -U \
+            -s /usr/bin/bash \
+            -c "${DOCKERUSERCOMMENT}" ${DOCKERUSER} && \
+    echo "${DOCKERUSER} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers && \
+    usermod -a -G video ${DOCKERUSER} && \
+    usermod -a -G dialout ${DOCKERUSER} && \
+    usermod -a -G plugdev ${DOCKERUSER}
+
+# HOTFIX: RViz black screen
+RUN apt-get update && apt-get install -y software-properties-common && add-apt-repository -y ppa:kisak/kisak-mesa && \
+    apt update -y && \
+    apt upgrade -y
+
+RUN apt-get update && apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-overwrite" \
+    apt-utils \
+    ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-rviz2 \
+    ros-humble-rqt-common-plugins \
+    ros-humble-teleop-twist-keyboard \
+    ros-humble-ros2-controllers \
+    ros-humble-ros2-control \
+    ros-humble-v4l2-camera \
+    ros-humble-urdf-tutorial \
+    ros-humble-realsense2-camera \
+    ros-humble-topic-based-ros2-control \
+    ros-humble-ament-cmake-nose \
+    ros-humble-tf-transformations \
+    ros-humble-image-transport-plugins \
+    ros-humble-foxglove-bridge \
+    ros-humble-ros-testing \
+    ros-humble-test-msgs \
+    ros-humble-launch-testing \
+    ros-humble-launch-testing-ament-cmake \
+    python3-pytest \
+    --no-install-recommends \
+    nano \
+    alsa \
+    libxshmfence1 \
+    libgtk-3-dev \ 
+    libopencv-dev \
+    vim \
+    python3-pip \
+    gdb \
+    wget \
+    fuse \
+    libfuse2 \
+    libhidapi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY ./robo_imitate.repos /robo_imitate.repos
+RUN mkdir -p /${DOCKERUSER}/ros2_libs_ws/src/ && \
+    cd /${DOCKERUSER}/ros2_libs_ws && \
+    vcs import --recursive src < /robo_imitate.repos && \
+    . /opt/ros/humble/setup.sh && \
+    colcon build --symlink-install --packages-up-to \
+        cartesian_motion_controller \
+        cartesian_controller_handles \
+        topic_based_ros2_control \
+        xarm_controller \
+        xarm_description \
+        ros2_numpy
+
+COPY ./docker/cyclonedds.xml /etc/cyclonedds.xml
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ENV CYCLONEDDS_URI=/etc/cyclonedds.xml
+ENV DOCKERUSER=${DOCKERUSER}
+
+USER ${DOCKERUSER}
+
+RUN pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+RUN pip3 install --no-warn-script-location --user lapx transforms3d
+RUN pip3 install pymap3d pyspacemouse tabulate
+
+# dep for imitation model
+RUN pip install 'termcolor>=2.4.0' \
+                'gdown>=5.1.0' \
+                'hydra-core >=1.3.2'\
+                'einops >=0.8.0'\
+                'pymunk >=6.6.0' \
+                'zarr >=2.17.0' \
+                'numba >=0.59.0' \
+                'opencv-python >=4.9.0' \
+                'diffusers >=0.27.2' \
+                'torchvision >=0.17.1' \
+                'datasets >=2.19.0' \
+                'numpy<1.24' \
+                matplotlib
+
+COPY ./docker/bashrc /tmp/bashrc
+RUN cat /tmp/bashrc >> /${DOCKERUSER}/.bashrc
+
+WORKDIR /${DOCKERUSER}/ros2_ws
