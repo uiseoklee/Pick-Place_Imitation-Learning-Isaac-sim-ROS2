@@ -32,12 +32,12 @@ If you want to change the data format, you can do so directly during data collec
   ```
   2. Run the script to control the simulated robot:
   ```sh
-  ./episode_generator_picking
+  ./episode_generator_rbpickplace
   ```
     
 
-### **Real  Data Collection**
-  To collect data from a real robot, use the following steps:
+### **Manual Data Collection**
+  To collect data from manually-controlled robot, use the following steps:
   1. Start the episode manager to manage data saving:
   ```sh
   ./episode_manager
