@@ -4,7 +4,7 @@
 
 ## 🎥 데모 영상 보기
 
-![Pick-Place Demo](media/imitation_learning_pickplace_4.gif)
+![Pick-Place Demo](media/pickplace_imitationlearning_3.gif)
 
 ## 📁 프로젝트 구조
 
