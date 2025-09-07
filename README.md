@@ -41,14 +41,19 @@ source ./install/local_setup.bash
 ```
 ros2 launch xarm_bringup lite6_cartesian_launch.py rviz:=false sim:=true
 ```
-### Run Model in Docker
+### Run Simulator in Docker
+Open another terminal and run Isaac Sim(v4.2.0)
+!NOTE: Isaac Sim needs to be run with docker to communicate with the source code.
+and load environments(lite6_wCamera_w1Block_wBasket.usda)
+### Inferencing trained Model in Docker
 Open another terminal and run:
 ```
 make exec
 cd src/robo_imitate
 ./imitation/pickplace_redblock
 ```
-### Model Training
+### Newly Model Training
+!NOTE: Collect new data first
 Inside the robo_imitate directory
 ```
 docker build --build-arg UID=$(id -u) -t imitation .
