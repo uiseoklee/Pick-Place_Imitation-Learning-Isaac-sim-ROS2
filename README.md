@@ -7,11 +7,10 @@ This project implements a pick-and-place task using imitation learning. This is 
 ![Pick-Place Demo](media/pickandplace_imitationlearning_video.gif)
 
 ## Technologies Used
-
+- Imitation Learning
 - Isaac Sim
 - ROS2
-- Python
-- Imitation Learning
+
 ## What This Repository Enables
 - Collect demonstrations in simulated environments
 - Train and evaluate a Diffusion Policy mode
