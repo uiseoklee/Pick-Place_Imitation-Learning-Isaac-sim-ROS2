@@ -4,7 +4,7 @@ This project implements a pick-and-place task using imitation learning. This is 
 
 ## Demo Video
 
-![Pick-Place Demo](media/pickplace_imitationlearning_3.gif)
+![Pick-Place Demo](media/pickandplace_imitationlearning_video.gif)
 
 ## Technologies Used
 
