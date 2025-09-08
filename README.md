@@ -44,9 +44,10 @@ ros2 launch xarm_bringup lite6_cartesian_launch.py rviz:=false sim:=true
 ```
 ### Run Simulator in Docker
 Open another terminal and run Isaac Sim(v4.2.0)
-**NOTE:** Isaac Sim needs to be run with Docker to communicate with the source code.**NOTE:** Isaac Sim needs to be run with Docker to communicate with the source code.
 
-and load environments(lite6_wCamera_w1Block_wBasket.usda)
+**NOTE:** Isaac Sim needs to be run with Docker to communicate with the source code.
+
+And load environments(lite6_wCamera_w1Block_wBasket.usda)
 ### Inferencing trained Model in Docker
 Open another terminal and run:
 ```
