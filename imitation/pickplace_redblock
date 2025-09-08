@@ -35,7 +35,7 @@ def call_ros2_service(activate_controllers, deactivate_controllers):
         print(f"Error calling ROS 2 service: {e}")
 
 class OperationState(Enum):
-    IDLE = 0; MOVE = 1; GO_CLOSE = 2; CLOSE_GRIPPER = 3; UP = 4
+    IDLE = 0; MOVE_TO_REDBLOCK = 1; GO_CLOSE = 2; CLOSE_GRIPPER = 3; UP = 4
     MOVE_TO_BASKET = 5; DOWN = 6; OPEN_GRIPPER = 7; RETREAT_UP = 8; END = 9
 
 class PickAndPlaceRedBlock(Node):
@@ -84,7 +84,6 @@ class PickAndPlaceRedBlock(Node):
         self.state = OperationState.IDLE
         self.place_target_frame_name = "place_target"
         
-        # ★★★ 추가된 부분: 목표 방향을 저장할 변수 ★★★
         self.fixed_target_orientation = None
 
     def move_arm_to_init_pose(self):
@@ -124,10 +123,10 @@ class PickAndPlaceRedBlock(Node):
         self.current_pose.header.frame_id = 'link_base'
     
         if self.state == OperationState.IDLE:
-            self.state = OperationState.MOVE
+            self.state = OperationState.MOVE_TO_REDBLOCK
             self.timer = time.time()
             self.step = 0
-            # ★★★ 추가된 부분: MOVE 시작 시 목표 방향을 한 번만 읽어서 저장 ★★★
+
             pick_target_tf = self.get_transform('link_base', 'pick_target')
             if pick_target_tf:
                 self.fixed_target_orientation = pick_target_tf.transform.rotation
@@ -135,38 +134,38 @@ class PickAndPlaceRedBlock(Node):
                 self.get_logger().error("Could not get pick_target at startup, stopping.")
                 self.state = OperationState.END
 
-        elif self.state in [OperationState.MOVE, OperationState.MOVE_TO_BASKET]:
+        elif self.state in [OperationState.MOVE_TO_REDBLOCK, OperationState.MOVE_TO_BASKET]:
             self.action = self.imitation.step(self.image, self.observation_pose)
             if self.action is None: return
             
-            # 1. 위치(XYZ)는 AI의 예측을 사용 (스케일링 없음)
+            # 1. Position (XYZ) uses AI prediction
             self.current_pose_relativ.pose.position.x = float(self.action[0])
             self.current_pose_relativ.pose.position.y = float(self.action[1])
             self.current_pose_relativ.pose.position.z = float(self.action[2])
             
-            # 2. 방향(Orientation)은 예측값을 무시하고, 현재 방향을 유지하도록 설정
+            # 2. Direction (Orientation) ignores predicted values and is set to maintain the current direction
             self.current_pose_relativ.pose.orientation.w = 1.0
             self.current_pose_relativ.pose.orientation.x = 0.0
             self.current_pose_relativ.pose.orientation.y = 0.0
             self.current_pose_relativ.pose.orientation.z = 0.0
             
-            # 3. 상대 위치 이동 행렬 계산
+            # 3. Calculate relative position movement matrix
             relative_transform = ros2numpy(self.current_pose_relativ.pose)
-            # 4. 새로운 목표 위치 계산
+            # 4. Calculate new target position
             new_target_transform = ros2numpy(self.observation_current_pose.pose) @ relative_transform
             
-            # ★★★ 핵심 수정: 최종 목표 방향을 고정된 값으로 덮어쓰기 ★★★
+            # Override final target direction with fixed value
             final_pose = numpy2ros(new_target_transform, Pose)
-            if self.state == OperationState.MOVE and self.fixed_target_orientation:
+            if self.state == OperationState.MOVE_TO_REDBLOCK and self.fixed_target_orientation:
                 final_pose.orientation = self.fixed_target_orientation
             elif self.state == OperationState.MOVE_TO_BASKET:
-                # Place 단계에서는 블록을 잡았을 때의 방향을 유지
+                # In the Place phase, maintain the direction when the block was grabbed
                 final_pose.orientation = self.observation_current_pose.pose.orientation
 
             self.current_pose.pose = final_pose
             
-            # 상태 전환 로직
-            if self.state == OperationState.MOVE:
+            # State transition logic
+            if self.state == OperationState.MOVE_TO_REDBLOCK:
                 if self.observation_current_pose.pose.position.z < 0.12:
                     self.state = OperationState.GO_CLOSE
                     self.timer = time.time()
