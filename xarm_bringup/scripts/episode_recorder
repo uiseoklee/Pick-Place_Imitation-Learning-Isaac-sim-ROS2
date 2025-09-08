@@ -128,7 +128,7 @@ class SaveTeleoperationData(Node):
         quat = [o.w, o.x, o.y, o.z]
         euler = t3d.euler.quat2euler(quat)
 
-        ### ★★★ 핵심 수정: 7번째 상태(phase_indicator) 추가 ★★★ ###
+        # Phase indicator: 0.0 for pick phase, 1.0 for place phase
         phase_indicator = 0.0 if self.is_in_pick_phase else 1.0
         
         observation_str = f"[{p.x}, {p.y}, {p.z}, {euler[0]}, {euler[1]}, {euler[2]}, {phase_indicator}]\n"

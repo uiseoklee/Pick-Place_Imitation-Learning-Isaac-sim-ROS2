@@ -20,7 +20,7 @@ import numpy as np
 
 class EnvStates(Enum):
     IDLE = 0; CLOSE_GRIPPER = 1; OPEN_GRIPPER = 2; RESET = 3; UP = 4
-    DOWN = 5; MOVE = 6; GO_CLOSE = 7; MOVE_TO_BASKET = 8; RETREAT_UP = 9
+    DOWN = 5; MOVE_TO_REDBLOCK = 6; GO_CLOSE = 7; MOVE_TO_BASKET = 8; RETREAT_UP = 9
 
 class GripperStatus(Enum):
     OPEN = 0; CLOSE = 1
@@ -120,7 +120,7 @@ class ControlObjectPicking(Node):
         base_gripper_matrix = rnp.numpify(base_gripper_tf.transform)
         
         pose, gripper_target_tf, gripper_target = None, None, None
-        if self.state in [EnvStates.MOVE, EnvStates.GO_CLOSE]:
+        if self.state in [EnvStates.MOVE_TO_REDBLOCK, EnvStates.GO_CLOSE]:
             gripper_target_tf = self.get_transform('gripper_base_link', 'pick_target')
             if not gripper_target_tf: return
             gripper_target = rnp.numpify(gripper_target_tf.transform)
@@ -128,14 +128,14 @@ class ControlObjectPicking(Node):
         
         if self.state == EnvStates.IDLE:
             if time.time() - self.start_time > 1.0:
-                self.state = EnvStates.MOVE
+                self.state = EnvStates.MOVE_TO_REDBLOCK
                 if self.new_episode:
                     self.new_episode = False
                     self.end_episode_cnt = 0
                     self.publisher_start_saving.publish(Int32(data=2))
                     self.skip_saving = False
 
-        elif self.state == EnvStates.MOVE:
+        elif self.state == EnvStates.MOVE_TO_REDBLOCK:
             self.target_pose.pose = pose
             if are_transforms_close(gripper_target):
                 self.end_episode_cnt += 1
@@ -173,28 +173,25 @@ class ControlObjectPicking(Node):
         
         elif self.state == EnvStates.UP:
             self.skip_saving = True
-            # 현재 XY는 유지한 채로 Z축으로만 0.35m까지 들어올림
             lift_pose_matrix = np.copy(base_gripper_matrix)
             lift_pose_matrix[2, 3] = 0.35
             self.target_pose.pose = rnp.msgify(Pose, lift_pose_matrix)
             
-            # 추론 코드의 12초 대기는 너무 길어보여, 2초로 유지합니다.
-            # 이 시간은 시뮬레이션 환경에 따라 조절이 필요할 수 있습니다.
             if time.time() - self.start_time > 12.0:
                 self.state = EnvStates.MOVE_TO_BASKET
                 self.start_time = time.time()
 
         elif self.state == EnvStates.MOVE_TO_BASKET:
             self.skip_saving = False
-            # 추론 코드의 pre-place 로직은 복잡하므로, 여기서는 TF기반으로 단순화
+
             place_target_tf = self.get_transform('link_base', self.basket_frame_name)
             if place_target_tf:
                 target_pose = PoseStamped()
                 target_pose.header.frame_id = 'link_base'
                 target_pose.pose.position.x = place_target_tf.transform.translation.x
                 target_pose.pose.position.y = place_target_tf.transform.translation.y
-                target_pose.pose.position.z = 0.20 # pre-place 높이
-                target_pose.pose.orientation = base_gripper_tf.transform.rotation # 현재 방향 유지
+                target_pose.pose.position.z = 0.20
+                target_pose.pose.orientation = base_gripper_tf.transform.rotation
                 self.target_pose = target_pose
                 
                 dist_xy = np.linalg.norm([base_gripper_matrix[0,3] - target_pose.pose.position.x, 
