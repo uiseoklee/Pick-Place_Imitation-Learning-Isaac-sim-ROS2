@@ -1,6 +1,6 @@
-# Pick-Place Imitation Learning with Isaac Sim & ROS 2
+# Pick and Place Imitation Learning with Isaac Sim & ROS2
 
-This project implements Pick-and-Place imitation learning using NVIDIA Isaac Sim and ROS 2.
+This project implements a pick-and-place task using imitation learning. This is accomplished solely through simulation, without expensive hardware. The simulator uses NVIDIA Isaac Sim and requires ROS2 integration.
 
 ## Demo Video
 
@@ -9,7 +9,7 @@ This project implements Pick-and-Place imitation learning using NVIDIA Isaac Sim
 ## Technologies Used
 
 - Isaac Sim
-- ROS 2
+- ROS2
 - Python
 - Imitation Learning
 ## What This Repository Enables
@@ -19,8 +19,9 @@ This project implements Pick-and-Place imitation learning using NVIDIA Isaac Sim
 
 ## Setup Instructions
 ### Docker Installation
-You need to have Docker installed. If you have an NVIDIA GPU, follow this guide for GPU support.
+You need to have Docker installed. If you have an NVIDIA GPU, follow [this guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) for GPU support.  
 Isaac Sim must also be installed if you plan to use simulation.
+
 ```
 sudo apt install git make curl
 curl -sSL https://get.docker.com | sh && sudo usermod -aG docker $USER
@@ -31,19 +32,20 @@ git clone https://github.com/uiseoklee/Pick-Place_Imitation-Learning-Isaac-sim-R
 cd Pick-Place_Imitation-Learning-Isaac-sim-ROS2/docker
 make build-pc run exec
 ```
-### Build ROS 2 Packages
+### Build ROS2 Packages
 ```
 colcon build --symlink-install
 source ./install/local_setup.bash
 ```
 ## Running Simulation
-### Launch ROS 2 Controller
+### Launch ROS2 Controller
 ```
 ros2 launch xarm_bringup lite6_cartesian_launch.py rviz:=false sim:=true
 ```
 ### Run Simulator in Docker
 Open another terminal and run Isaac Sim(v4.2.0)
-!NOTE: Isaac Sim needs to be run with docker to communicate with the source code.
+**NOTE:** Isaac Sim needs to be run with Docker to communicate with the source code.**NOTE:** Isaac Sim needs to be run with Docker to communicate with the source code.
+
 and load environments(lite6_wCamera_w1Block_wBasket.usda)
 ### Inferencing trained Model in Docker
 Open another terminal and run:
@@ -53,8 +55,8 @@ cd src/robo_imitate
 ./imitation/pickplace_redblock
 ```
 ### Newly Model Training
-!NOTE: Collect new data first
-Inside the robo_imitate directory
+**NOTE:** First, you need to collect the expert dataset following [this procedure](https://github.com/uiseoklee/Pick-Place_Imitation-Learning-Isaac-sim-ROS2/tree/main/xarm_bringup/scripts) inside the docker directory.
+Then, go outside the docker directory and run the following in the Pick-Place_Imitation-Learning-Isaac-sim-ROS2 directory.
 ```
 docker build --build-arg UID=$(id -u) -t imitation .
 docker run -v $(pwd)/imitation/:/docker/app/imitation:Z --gpus all -it \
